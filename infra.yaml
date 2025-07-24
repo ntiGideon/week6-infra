@@ -413,7 +413,7 @@ Resources:
       Memory: '512'
       ContainerDefinitions:
       - Name: FotoApp6-Container
-        Image: 767828749690.dkr.ecr.eu-central-1.amazonaws.com/fotoshop:latest
+        Image: 767828749690.dkr.ecr.eu-central-1.amazonaws.com/fotoshop6:latest
         PortMappings:
         - ContainerPort: 8000
           HostPort: 8000
