@@ -1,0 +1,862 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Complete infrastructure for highly available containerized image application including VPC, ECS, and ALB with CodePipeline for Week6'
+
+Parameters:
+  SecretsManagerArn:
+    Description: 'ARN of the Secrets Manager secret containing application secrets and configuration'
+    Type: String
+    Default: 'arn:aws:secretsmanager:eu-central-1:767828749690:secret:ImageAppSecrets-PR4NkN'
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: FotoApp6-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: FotoApp6-IGW
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PublicSubnet2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.3.0/24
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PrivateSubnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.4.0/24
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PrivateSubnet2
+
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+      - Key: Name
+        Value: FotoApp6-NatGateway1EIP
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+      - Key: Name
+        Value: FotoApp6-NatGateway2EIP
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+      - Key: Name
+        Value: FotoApp6-NatGateway1
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+      - Key: Name
+        Value: FotoApp6-NatGateway2
+
+# Route Tables and Associations
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PrivateRouteTable1
+
+  PrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PrivateRouteTable2
+
+  PrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+
+#Database
+  # RDS Security Group
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS PostgreSQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        SourceSecurityGroupId: !Ref ECSSecurityGroup
+      Tags:
+      - Key: Name
+        Value: FotoApp6-RDSSecurityGroup
+
+  # RDS Subnet Group (using private subnets)
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS PostgreSQL
+      SubnetIds:
+      - !Ref PrivateSubnet1
+      - !Ref PrivateSubnet2
+      Tags:
+      - Key: Name
+        Value: FotoApp6-DBSubnetGroup
+
+  # RDS PostgreSQL Instance
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: FotoApp6-RDS-Secret6
+      Description: "Credentials for RDS PostgreSQL database"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "postgres"}'
+        GenerateStringKey: "password"
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+      - Key: Name
+        Value: FotoApp6-RDS-Secret
+
+  # Then modify the DBInstance resource
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      DBInstanceClass: db.t3.medium
+      Engine: postgres
+      EngineVersion: '17'
+      DBInstanceIdentifier: FotoApp6-DB6
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      DBName: fotoapp
+      MultiAZ: true
+      StorageType: gp2
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+      - !GetAtt RDSSecurityGroup.GroupId
+      Tags:
+      - Key: Name
+        Value: FotoApp6-PostgreSQL
+    DependsOn: DBSecret
+
+
+  # Security Groups
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: FotoApp6-ALBSecurityGroup
+      GroupDescription: Security group for ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: FotoApp6-ALBSecurityGroup
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: FotoApp6-ECSSecurityGroup
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 8000
+        ToPort: 8000
+        SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+      - Key: Name
+        Value: FotoApp6-ECSSecurityGroup
+
+  # ECS Cluster and Resources
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: FotoApp6-Cluster
+      CapacityProviders:
+      - FARGATE
+      - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+      - CapacityProvider: FARGATE
+        Weight: 1
+        Base: 1
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: FotoApp6-ALB
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+      - !Ref ALBSecurityGroup
+      Subnets:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: ALB
+    Properties:
+      Name: FotoApp6-TG
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckPath: /actuator/health
+      HealthCheckPort: 8000
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200-499'
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+    - ALB
+    - ALBTargetGroup
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+  ALBTestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 9000
+      Protocol: HTTP
+
+  ALBGreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: FotoApp6-GreenTG
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckPath: /actuator/health
+      HealthCheckIntervalSeconds: 60
+      HealthCheckTimeoutSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: '200-499'
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: FotoApp6-ECSTaskExecutionPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ecr:GetAuthorizationToken
+            - ecr:BatchCheckLayerAvailability
+            - ecr:GetDownloadUrlForLayer
+            - ecr:BatchGetImage
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - s3:GetObject
+            - s3:PutObject
+            - s3:ListBucket
+            - secretsmanager:GetSecretValue
+            Resource: '*'
+
+  CloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/FotoApp6-Task
+      RetentionInDays: 7
+
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: FotoApp6-Task
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      Cpu: '256'
+      Memory: '512'
+      ContainerDefinitions:
+      - Name: FotoApp6-Container
+        Image: 767828749690.dkr.ecr.eu-central-1.amazonaws.com/fotoshop:latest
+        PortMappings:
+        - ContainerPort: 8000
+          HostPort: 8000
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref CloudWatchLogsGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: ecs
+        Environment:
+        - Name: SPRING_PROFILES_ACTIVE
+          Value: production
+        - Name: AWS_REGION
+          Value: eu-central-1
+        - Name: AWS_BUCKET_NAME
+          Value: fotografi-app
+        - Name: DB_HOST
+          Value: !GetAtt DBInstance.Endpoint.Address
+        - Name: DB_PORT
+          Value: !GetAtt DBInstance.Endpoint.Port
+        HealthCheck:
+          Command: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/actuator/health || exit 1" ]
+          Interval: 30
+          Timeout: 5
+          Retries: 3
+          StartPeriod: 60
+        Secrets:
+        - Name: DATABASE_URL
+          ValueFrom: !Sub "${SecretsManagerArn}:DATABASE_URL::"
+        - Name: DATABASE_USERNAME
+          ValueFrom: !Sub "${SecretsManagerArn}:DATABASE_USERNAME::"
+        - Name: DATABASE_PASSWORD
+          ValueFrom: !Sub "${SecretsManagerArn}:DATABASE_PASSWORD::"
+        - Name: AWS_ACCESS_KEY
+          ValueFrom: !Sub "${SecretsManagerArn}:AWS_ACCESS_KEY::"
+        - Name: AWS_SECRET_KEY
+          ValueFrom: !Sub "${SecretsManagerArn}:AWS_SECRET_KEY::"
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+    - ALBListener
+    - ALBTargetGroup
+    - ECSTaskDefinition
+    Properties:
+      ServiceName: FotoApp6-Service
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 2
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+          - !Ref ECSSecurityGroup
+          Subnets:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      LoadBalancers:
+      - ContainerName: FotoApp6-Container
+        ContainerPort: 8000
+        TargetGroupArn: !Ref ALBTargetGroup
+      TaskDefinition: !Ref ECSTaskDefinition
+
+  # Auto Scaling
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: application-autoscaling.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: service-autoscaling
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - application-autoscaling:*
+            - cloudwatch:DescribeAlarms
+            - cloudwatch:PutMetricAlarm
+            - ecs:DescribeServices
+            - ecs:UpdateService
+            Resource: '*'
+
+  ECSServiceAutoScaling:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: ECSService
+    Properties:
+      MaxCapacity: 4
+      MinCapacity: 2
+      ResourceId: !Sub "service/${ECSCluster}/${ECSService.Name}"
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt AutoScalingRole.Arn
+
+  ECSServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: ECSServiceAutoScaling
+    Properties:
+      PolicyName: FotoApp6-ScaleOutPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ECSServiceAutoScaling
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+  # CodePipeline Resources
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: CodePipelineAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - codebuild:*
+            - ecs:*
+            - ecr:*
+            - s3:*
+            - iam:PassRole
+            - cloudformation:*
+            - elasticloadbalancing:*
+            - secretsmanager:GetSecretValue
+            Resource: '*'
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: CodeBuildAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ecr:*
+            - logs:*
+            - s3:*
+            - codebuild:*
+            - secretsmanager:GetSecretValue
+            Resource: '*'
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: week5-codepipeline-artifacts
+      VersioningConfiguration:
+        Status: Enabled
+
+  # Lambda function to retrieve secrets for CodeBuild
+  GetSecretsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: FotoApp6-GetSecrets
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt GetSecretsLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          import logging
+
+          # Set up logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              logger.info(f"Event: {json.dumps(event)}")
+              
+              try:
+                  if event['RequestType'] == 'Delete':
+                      logger.info("Delete request - returning success")
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  secrets_client = boto3.client('secretsmanager', region_name='eu-central-1')
+                  secret_arn = event['ResourceProperties']['SecretArn']
+                  
+                  logger.info(f"Getting secret from ARN: {secret_arn}")
+                  
+                  response = secrets_client.get_secret_value(SecretId=secret_arn)
+                  secret_string = response['SecretString']
+                  logger.info("Successfully retrieved secret")
+                  
+                  secret_values = json.loads(secret_string)
+                  logger.info("Successfully parsed secret JSON")
+                  
+                  # Return the values needed by CodeBuild
+                  response_data = {
+                      'ECR_REPOSITORY_NAME': secret_values.get('ECR_REPOSITORY_NAME', 'fotoshop6'),
+                      'GITHUB_REPO': secret_values.get('GITHUB_REPO', 'https://github.com/yourusername/yourrepo'),
+                      'GITHUB_BRANCH': secret_values.get('GITHUB_BRANCH', 'main'),
+                      'GITHUB_TOKEN': secret_values.get('GITHUB_TOKEN', '')
+                  }
+                  
+                  logger.info(f"Response data keys: {list(response_data.keys())}")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                  
+              except Exception as e:
+                  logger.error(f"Error occurred: {str(e)}")
+                  logger.error(f"Error type: {type(e)}")
+                  import traceback
+                  logger.error(f"Traceback: {traceback.format_exc()}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  GetSecretsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyName: SecretsManagerAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            - secretsmanager:DescribeSecret
+            Resource:
+            - !Ref SecretsManagerArn
+            - !Sub "${SecretsManagerArn}*"
+
+  GetSecretsCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt GetSecretsFunction.Arn
+      SecretArn: !Ref SecretsManagerArn
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: GetSecretsCustomResource
+    Properties:
+      Name: FotoApp6-Build
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+        - Name: REPOSITORY_URI
+          Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${GetSecretsCustomResource.ECR_REPOSITORY_NAME}"
+        - Name: CONTAINER_NAME
+          Value: FotoApp6-Container
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REPOSITORY_URI
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the Docker image...
+                - docker build -t $REPOSITORY_URI:latest .
+                - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker images...
+                - docker push $REPOSITORY_URI:latest
+                - docker push $REPOSITORY_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION
+                - echo Writing image definitions file...
+                - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$CODEBUILD_RESOLVED_SOURCE_VERSION > imagedefinitions.json
+          artifacts:
+            files: imagedefinitions.json
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: GetSecretsCustomResource
+    Properties:
+      Name: FotoApp6-Pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactBucket
+      Stages:
+      - Name: Source
+        Actions:
+        - Name: SourceAction
+          ActionTypeId:
+            Category: Source
+            Owner: ThirdParty
+            Version: '1'
+            Provider: GitHub
+          Configuration:
+            Owner: !Select [ 3, !Split [ '/', !GetAtt GetSecretsCustomResource.GITHUB_REPO ] ]
+            Repo: !Select [ 4, !Split [ '/', !GetAtt GetSecretsCustomResource.GITHUB_REPO ] ]
+            Branch: !GetAtt GetSecretsCustomResource.GITHUB_BRANCH
+            OAuthToken: !GetAtt GetSecretsCustomResource.GITHUB_TOKEN
+          OutputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+      - Name: Build
+        Actions:
+        - Name: BuildAction
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Version: '1'
+            Provider: CodeBuild
+          Configuration:
+            ProjectName: !Ref CodeBuildProject
+          InputArtifacts:
+          - Name: SourceOutput
+          OutputArtifacts:
+          - Name: BuildOutput
+          RunOrder: 1
+      - Name: Deploy
+        Actions:
+        - Name: DeployAction
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: '1'
+            Provider: ECS
+          Configuration:
+            ClusterName: !Ref ECSCluster
+            ServiceName: !GetAtt ECSService.Name
+            FileName: imagedefinitions.json
+          InputArtifacts:
+          - Name: BuildOutput
+          RunOrder: 1
+
+  # ECR Repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: fotoshop6
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+Outputs:
+  VPCId:
+    Description: The VPC Id
+    Value: !Ref VPC
+    Export:
+      Name: FotoApp6-VPCId
+
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: FotoApp6-PublicSubnet1Id
+
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: FotoApp6-PublicSubnet2Id
+
+  PrivateSubnet1Id:
+    Description: Private Subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: FotoApp6-PrivateSubnet1Id
+
+  PrivateSubnet2Id:
+    Description: Private Subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: FotoApp6-PrivateSubnet2Id
+
+  ALBSecurityGroupId:
+    Description: ALB Security Group ID
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: FotoApp6-ALBSecurityGroupId
+
+  ECSSecurityGroupId:
+    Description: ECS Security Group ID
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: FotoApp6-ECSSecurityGroupId
+
+  ALBDNSName:
+    Description: 'DNS name of the ALB'
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: FotoApp6-ALBDNSName
+
+  ECSClusterName:
+    Description: 'Name of the ECS Cluster'
+    Value: !Ref ECSCluster
+    Export:
+      Name: FotoApp6-ECSClusterName
+
+  CodePipelineName:
+    Description: 'Name of the CodePipeline'
+    Value: !Ref CodePipeline
+    Export:
+      Name: FotoApp6-CodePipelineName
+
+  DBEndpoint:
+    Description: 'RDS PostgreSQL Endpoint'
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: FotoApp6-DBEndpoint
+
+  DBPort:
+    Description: 'RDS PostgreSQL Port'
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: FotoApp6-DBPort
